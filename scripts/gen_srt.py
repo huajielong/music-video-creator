@@ -136,27 +136,59 @@ def align_with_whisper(audio_path: str, parsed: list[dict], total_duration: floa
     """
     Use Whisper to get actual vocal timestamps.
     Maps transcribed segments to known lyrics by count or merge/split.
+    Boosts quiet audio to improve vocal detection in music mixes.
     """
     try:
-        print(f"  Transcribing with Whisper (small model)...")
+        import numpy as np
         model = _whisper.load_model('small')
-        result = model.transcribe(audio_path)
+
+        # Load audio array for RMS-aware processing
+        audio = _whisper.load_audio(audio_path)
+        rms = np.sqrt(np.mean(audio ** 2))
+        rms_db = 20 * np.log10(rms + 1e-10)
+
+        # Boost quiet audio (vocals buried in music mix) so Whisper can detect them
+        boost = 1.0
+        if rms_db < -15:
+            boost = 3.0
+            audio = np.clip(audio * boost, -1.0, 1.0)
+            print(f"  Audio RMS={rms_db:.1f}dB, boosted {boost:.1f}x for better vocal detection")
+
+        result = model.transcribe(audio, language='zh')
 
         # Filter out instrumental tags (e.g. "Zither Harp", "Music") via CJK detection
         segments = [s for s in result['segments'] if _has_lyric_content(s['text'].strip())]
-        print(f"  Whisper detected {len(segments)} vocal segments, expected {len(parsed)}")
+        n_seg = len(segments)
+        n_expected = len(parsed)
+        print(f"  Whisper detected {n_seg} vocal segments, expected {n_expected}")
 
-        if len(segments) == len(parsed):
+        # If too few segments, retry with stronger boost
+        if n_seg < n_expected * 0.5 and boost == 1.0:
+            print(f"  Too few segments, retrying with gain boost...")
+            audio = _whisper.load_audio(audio_path)
+            audio = np.clip(audio * 3.0, -1.0, 1.0)
+            result = model.transcribe(audio, language='zh')
+            segments = [s for s in result['segments'] if _has_lyric_content(s['text'].strip())]
+            n_seg = len(segments)
+            print(f"  Retry: detected {n_seg} vocal segments")
+
+        # If extra segments, drop from the end (usually trailing non-lyric content)
+        if n_seg > n_expected:
+            segments = segments[:n_expected]
+            n_seg = len(segments)
+
+        if n_seg == n_expected:
             for i, seg in enumerate(segments):
                 parsed[i]["start"] = seg["start"]
                 parsed[i]["end"] = seg["end"]
             return parsed
 
         # Try merge/split matching before falling back
-        matched = _match_segments(segments, parsed)
-        if matched:
-            return matched
-        print(f"  Could not match {len(segments)} segments to {len(parsed)} lines, falling back to waveform analysis")
+        if n_seg > 0:
+            matched = _match_segments(segments, parsed)
+            if matched:
+                return matched
+        print(f"  Could not match {n_seg} segments to {n_expected} lines, falling back to waveform analysis")
         return None
 
     except Exception as e:

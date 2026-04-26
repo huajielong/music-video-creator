@@ -93,7 +93,7 @@ def submit_task(api_key: str, model: str, image_path: str, prompt: str,
     return None
 
 
-def poll_task(api_key: str, task_id: str, interval: int = 10, timeout: int = 300) -> dict | None:
+def poll_task(api_key: str, task_id: str, interval: int = 10, timeout: int = 600) -> dict | None:
     """Poll task until completion. Returns the result data."""
     headers = {"Authorization": f"Bearer {api_key}"}
     start = time.time()
@@ -123,15 +123,31 @@ def poll_task(api_key: str, task_id: str, interval: int = 10, timeout: int = 300
 def generate_video(api_key: str, model: str, image_path: str, prompt: str,
                    resolution: str, duration: int, watermark: bool,
                    output_path: str, poll_interval: int) -> bool:
-    """Generate one video: submit + poll + download."""
-    task_id = submit_task(api_key, model, image_path, prompt, resolution, duration, watermark)
-    if not task_id:
-        return False
+    """Generate one video: submit + poll + download (with retry on timeout)."""
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        task_id = submit_task(api_key, model, image_path, prompt, resolution, duration, watermark)
+        if not task_id:
+            if attempt < max_attempts:
+                wait = 10 * attempt
+                print(f"  [Retry {attempt}/{max_attempts}] submit failed, waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            return False
 
-    result = poll_task(api_key, task_id, interval=poll_interval)
-    if not result:
-        return False
+        result = poll_task(api_key, task_id, interval=poll_interval)
+        if result:
+            break  # success
 
+        if attempt < max_attempts:
+            wait = 10 * attempt
+            print(f"  [Retry {attempt}/{max_attempts}] poll failed/timeout, resubmitting in {wait}s...")
+            time.sleep(wait)
+        else:
+            print(f"  Failed after {max_attempts} attempts", file=sys.stderr)
+            return False
+
+    assert result is not None  # loop above guarantees success or early return
     video_url = result.get("content", {}).get("video_url")
     if not video_url:
         print("  No video_url in result", file=sys.stderr)
