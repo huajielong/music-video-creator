@@ -1,0 +1,6 @@
+{
+  "env": {
+    "DOUBAO_SEEDREAM_API_KEY": "${ARK_API_KEY}",
+    "DOUBAO_SEEDANCE_API_KEY": "${ARK_API_KEY}"
+  }
+}
