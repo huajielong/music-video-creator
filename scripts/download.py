@@ -6,12 +6,11 @@ Usage:
     python scripts/download.py --id <music_id>
     python scripts/download.py --url https://www.tunee.ai/music/<id>
 
-The generate API returns a share page URL (not a direct audio file).
-This script opens that page in Playwright, clicks the download button,
-and saves the MP3 to output/<title>.mp3.
+Strategy (automatic):
+1. Direct URL extraction via requests (fast, no browser needed)
+2. Fallback: Playwright browser automation (handles CDN 403)
 
-Why Playwright: the CDN (media-cdn.tunee.ai) requires browser-level
-cookies/headers — direct curl/requests get 403 Forbidden.
+The CDN (media-cdn.tunee.ai) may require browser-level cookies.
 """
 
 import argparse
@@ -19,12 +18,62 @@ import os
 import re
 import sys
 import asyncio
+
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
+
 from playwright.async_api import async_playwright
 
 BASE_URL = "https://www.tunee.ai/music"
 
 
-async def download_mp3(music_id: str) -> str | None:
+def _extract_audio_url(music_id: str) -> str | None:
+    """Extract direct audio URL from Tunee share page HTML."""
+    share_url = f"{BASE_URL}/{music_id}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        resp = requests.get(share_url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return None
+        match = re.search(r'"audioUrl":"(https://[^"]+?\.mp3\?auth_key=[^"]+)"', resp.text)
+        return match.group(1) if match else None
+    except Exception:
+        return None
+
+
+def _try_direct_download(music_id: str) -> str | None:
+    """Download MP3 directly via extracted audio URL. Returns path or None."""
+    if not HAS_REQUESTS:
+        return None
+    audio_url = _extract_audio_url(music_id)
+    if not audio_url:
+        return None
+    output_dir = os.path.join(os.path.dirname(__file__), "..", "output")
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"{music_id}.mp3")
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        resp = requests.get(audio_url, headers=headers, stream=True, timeout=60)
+        if resp.status_code != 200:
+            print(f"  Direct download returned {resp.status_code}", file=sys.stderr)
+            return None
+        with open(output_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        size = os.path.getsize(output_path)
+        print(f"Downloaded: {output_path} ({size} bytes)")
+        return output_path
+    except Exception as e:
+        print(f"  Direct download failed: {e}", file=sys.stderr)
+        return None
+
+
+async def _download_with_playwright(music_id: str) -> str | None:
+    """Fallback: use Playwright to click download on the share page."""
     share_url = f"{BASE_URL}/{music_id}"
     output_dir = os.path.join(os.path.dirname(__file__), "..", "output")
     os.makedirs(output_dir, exist_ok=True)
@@ -51,7 +100,6 @@ async def download_mp3(music_id: str) -> str | None:
             download = await download_info.value
 
             suggested = download.suggested_filename or f"{music_id}.mp3"
-            # Sanitize filename for Windows
             safe_name = re.sub(r'[<>:"/\\|?*]', '_', suggested)
             output_path = os.path.join(output_dir, safe_name)
 
@@ -64,6 +112,15 @@ async def download_mp3(music_id: str) -> str | None:
             print(f"Download failed: {e}", file=sys.stderr)
             await browser.close()
             return None
+
+
+async def download_mp3(music_id: str) -> str | None:
+    """Download MP3 from Tunee. Tries direct URL extraction first, falls back to Playwright."""
+    result = _try_direct_download(music_id)
+    if result:
+        return result
+    print("  Direct download unavailable, falling back to Playwright...")
+    return await _download_with_playwright(music_id)
 
 
 def main():

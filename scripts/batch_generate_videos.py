@@ -2,27 +2,18 @@
 """
 Batch generate storyboard videos via Doubao Seedance API.
 
-Usage:
-    python scripts/batch_generate_videos.py --shots 1-30 --watermark false
+Features: retry with backoff, resume (skip existing), parallel execution, error summary.
 
-Args:
-    --shots       Shot range, e.g. 1-30 (default: 1)
-    --model       Model ID (default: doubao-seedance-1-5-pro-251215)
-    --resolution  Video resolution (default: 720p)
-    --duration    Video duration in seconds, 1.5.pro: 2-12 (default: 5)
-    --watermark   Add watermark (default: false)
-    --prompt      Motion prompt for video (default: auto from storyboard)
-    --api-key     ARK API key (default: from .env or env var)
-    --poll-interval Seconds between status polls (default: 10)
-    --output      Output directory (default: output/res/videos/)
+Usage:
+    python scripts/batch_generate_videos.py --shots 1-30 --workers 3
 """
 
 import argparse
 import base64
-import json
+import concurrent.futures
 import os
-import re
 import sys
+import threading
 import time
 import requests
 
@@ -55,8 +46,9 @@ def load_prompts(path: str) -> list[str]:
 
 
 def submit_task(api_key: str, model: str, image_path: str, prompt: str,
-                resolution: str, duration: int, watermark: bool) -> str:
-    """Submit a video generation task. Returns task_id."""
+                resolution: str, duration: int, watermark: bool,
+                max_retries: int = 3) -> str | None:
+    """Submit a video generation task. Returns task_id (with retry)."""
     with open(image_path, "rb") as f:
         img_b64 = base64.b64encode(f.read()).decode()
 
@@ -76,12 +68,29 @@ def submit_task(api_key: str, model: str, image_path: str, prompt: str,
         "watermark": watermark,
     }
 
-    resp = requests.post(TASK_ENDPOINT, json=payload, headers=headers, timeout=60)
-    if resp.status_code != 200:
-        print(f"  Submit failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
-        return None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(TASK_ENDPOINT, json=payload, headers=headers, timeout=60)
+            if resp.status_code != 200:
+                is_retryable = 500 <= resp.status_code < 600
+                if is_retryable and attempt < max_retries:
+                    wait = 5 * (2 ** (attempt - 1))
+                    print(f"  [Retry {attempt}/{max_retries}] Submit {resp.status_code}, waiting {wait}s...")
+                    time.sleep(wait)
+                    continue
+                print(f"  Submit failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                return None
+            return resp.json().get("id")
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            if attempt < max_retries:
+                wait = 5 * (2 ** (attempt - 1))
+                print(f"  [Retry {attempt}/{max_retries}] {e}, waiting {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"  Submit failed after {max_retries} retries: {e}", file=sys.stderr)
+                return None
 
-    return resp.json().get("id")
+    return None
 
 
 def poll_task(api_key: str, task_id: str, interval: int = 10, timeout: int = 300) -> dict | None:
@@ -90,18 +99,22 @@ def poll_task(api_key: str, task_id: str, interval: int = 10, timeout: int = 300
     start = time.time()
 
     while time.time() - start < timeout:
-        resp = requests.get(f"{TASK_ENDPOINT}/{task_id}", headers=headers, timeout=30)
-        data = resp.json()
-        status = data.get("status", "unknown")
+        try:
+            resp = requests.get(f"{TASK_ENDPOINT}/{task_id}", headers=headers, timeout=30)
+            data = resp.json()
+            status = data.get("status", "unknown")
 
-        if status == "succeeded":
-            return data
-        elif status in ("failed", "expired"):
-            err = data.get("error", "unknown error")
-            print(f"  Task failed: {err}", file=sys.stderr)
-            return None
+            if status == "succeeded":
+                return data
+            elif status in ("failed", "expired"):
+                err = data.get("error", "unknown error")
+                print(f"  Task failed: {err}", file=sys.stderr)
+                return None
 
-        time.sleep(interval)
+            time.sleep(interval)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            # Transient network error during poll — keep trying
+            time.sleep(interval)
 
     print(f"  Task timed out after {timeout}s", file=sys.stderr)
     return None
@@ -137,7 +150,6 @@ def generate_video(api_key: str, model: str, image_path: str, prompt: str,
 
 
 def parse_shot_range(text: str) -> list[int]:
-    """Parse '1-30' or '1,3,5' into list of shot numbers."""
     shots = []
     for part in text.split(","):
         part = part.strip()
@@ -147,6 +159,48 @@ def parse_shot_range(text: str) -> list[int]:
         else:
             shots.append(int(part))
     return shots
+
+
+_print_lock = threading.Lock()
+
+
+def _wait_interval(interval: float):
+    time.sleep(interval)
+
+
+def process_one_shot(shot_num: int, api_key: str, model: str, resolution: str,
+                     duration: int, watermark: bool, default_prompt: str,
+                     images_dir: str, output_dir: str, all_prompts: list[str],
+                     poll_interval: int, interval: float) -> tuple[int, bool, str]:
+    """Process a single shot. Returns (shot_num, success, status_label)."""
+    image_path = os.path.join(images_dir, f"shot_{shot_num:03d}.png")
+    if not os.path.exists(image_path):
+        with _print_lock:
+            print(f"[{shot_num:03d}] image not found, skipping")
+        return shot_num, False, "no_image"
+
+    video_path = os.path.join(output_dir, f"shot_{shot_num:03d}.mp4")
+    if os.path.exists(video_path):
+        with _print_lock:
+            print(f"[{shot_num:03d}] already exists, skipping")
+        return shot_num, True, "skipped"
+
+    shot_prompt = all_prompts[shot_num - 1] if shot_num <= len(all_prompts) else ""
+    motion = f"{default_prompt}，{shot_prompt[:60]}" if shot_prompt else default_prompt
+
+    with _print_lock:
+        print(f"[{shot_num:03d}] submitting...")
+    start_t = time.time()
+    ok = generate_video(api_key, model, image_path, motion,
+                        resolution, duration, watermark,
+                        video_path, poll_interval)
+    elapsed = time.time() - start_t
+    with _print_lock:
+        label = "done" if ok else "failed"
+        print(f"[{shot_num:03d}] {label} ({elapsed:.0f}s)")
+
+    _wait_interval(interval)
+    return shot_num, ok, "done" if ok else "failed"
 
 
 def main():
@@ -160,55 +214,60 @@ def main():
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--poll-interval", type=int, default=10)
     parser.add_argument("--output", default=None)
+    parser.add_argument("--workers", type=int, default=3, help="Parallel workers (default: 3)")
+    parser.add_argument("--interval", type=float, default=3.0,
+                        help="Seconds between requests per worker (default: 3)")
     args = parser.parse_args()
 
     api_key = resolve_api_key(args.api_key)
     watermark = args.watermark.lower() == "true"
 
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    images_dir = os.path.join(base, "output", "res", "images")
-    output_dir = args.output or os.path.join(base, "output", "res", "videos")
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    images_dir = os.path.join(base_dir, "output", "res", "images")
+    output_dir = args.output or os.path.join(base_dir, "output", "res", "videos")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Try to load prompts for context
-    prompts_file = os.path.join(base, "scripts", "image_prompts.py")
+    prompts_file = os.path.join(base_dir, "scripts", "image_prompts.py")
     all_prompts = load_prompts(prompts_file) if os.path.exists(prompts_file) else []
 
     shot_numbers = parse_shot_range(args.shots)
+    default_prompt = args.prompt or "动态画面，缓慢推镜头， cinematic camera movement"
+
     print(f"Generating {len(shot_numbers)} video(s)")
     print(f"  Model: {args.model}")
     print(f"  Resolution: {args.resolution}")
     print(f"  Duration: {args.duration}s")
     print(f"  Watermark: {watermark}")
+    print(f"  Workers: {args.workers}")
     print()
 
-    default_prompt = args.prompt or "动态画面，缓慢推镜头， cinematic camera movement"
+    succeeded = 0
+    failed = 0
+    skipped = 0
 
-    success = 0
-    for shot_num in shot_numbers:
-        image_path = os.path.join(images_dir, f"shot_{shot_num:03d}.png")
-        if not os.path.exists(image_path):
-            print(f"[{shot_num:03d}] Image not found: {image_path}")
-            continue
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = []
+        for shot_num in shot_numbers:
+            future = executor.submit(
+                process_one_shot, shot_num, api_key, args.model, args.resolution,
+                args.duration, watermark, default_prompt, images_dir, output_dir,
+                all_prompts, args.poll_interval, args.interval
+            )
+            futures.append(future)
 
-        video_path = os.path.join(output_dir, f"shot_{shot_num:03d}.mp4")
-        if os.path.exists(video_path):
-            print(f"[{shot_num:03d}] Skip (exists)")
-            success += 1
-            continue
+        for future in concurrent.futures.as_completed(futures):
+            _, ok, label = future.result()
+            if label == "skipped":
+                skipped += 1
+            elif label == "no_image":
+                failed += 1
+            elif ok:
+                succeeded += 1
+            else:
+                failed += 1
 
-        # Use shot prompt as context for the video motion prompt
-        shot_prompt = all_prompts[shot_num - 1] if shot_num <= len(all_prompts) else ""
-        motion = f"{default_prompt}，{shot_prompt[:60]}" if shot_prompt else default_prompt
-
-        print(f"[{shot_num:03d}] Submitting...")
-        ok = generate_video(api_key, args.model, image_path, motion,
-                           args.resolution, args.duration, watermark,
-                           video_path, args.poll_interval)
-        if ok:
-            success += 1
-
-    print(f"\nDone: {success}/{len(shot_numbers)} videos")
+    print(f"\nDone: {succeeded} succeeded, {failed} failed, {skipped} skipped")
+    sys.exit(0 if failed == 0 else 1)
 
 
 if __name__ == "__main__":

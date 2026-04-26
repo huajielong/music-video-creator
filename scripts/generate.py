@@ -119,7 +119,6 @@ def main():
         "action": "generate",
         "model": args.model,
         "modelKey": args.model,
-        "callback_url": "https://example.com/callback",
         "source": "tunee",
         "custom": True,
         "needCover": True,

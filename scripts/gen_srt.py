@@ -16,10 +16,11 @@ import subprocess
 import sys
 
 try:
-    import whisper
+    import whisper as _whisper
     HAS_WHISPER = True
 except ImportError:
     HAS_WHISPER = False
+    _whisper = None
 
 
 def parse_lyrics(text: str) -> list[dict[str, str]]:
@@ -41,18 +42,101 @@ def parse_lyrics(text: str) -> list[dict[str, str]]:
     return result
 
 
+def _match_segments(segments: list[dict], parsed_lines: list[dict]) -> list[dict] | None:
+    """Merge or split whisper segments to match the number of lyric lines."""
+    num_seg = len(segments)
+    num_lines = len(parsed_lines)
+
+    if num_seg == num_lines or num_seg == 0 or num_lines == 0:
+        return None
+    if num_seg > num_lines * 3 or num_lines > num_seg * 3:
+        return None
+
+    working = []
+    base = num_lines // num_seg
+    extra = num_lines % num_seg
+    cur = 0
+    for i, seg in enumerate(segments):
+        next_cur = cur + base + (1 if i < extra else 0)
+        working.append({
+            "start": seg["start"],
+            "end": seg["end"],
+            "duration": seg["end"] - seg["start"],
+            "line_start": cur,
+            "line_end": next_cur,
+        })
+        cur = next_cur
+
+    if num_seg > num_lines:
+        while len(working) > num_lines:
+            pair_idx = min(
+                range(len(working) - 1),
+                key=lambda i: working[i]["duration"] + working[i + 1]["duration"]
+            )
+            merged = {
+                "start": working[pair_idx]["start"],
+                "end": working[pair_idx + 1]["end"],
+                "duration": working[pair_idx]["duration"] + working[pair_idx + 1]["duration"],
+                "line_start": working[pair_idx]["line_start"],
+                "line_end": working[pair_idx + 1]["line_end"],
+            }
+            working[pair_idx] = merged
+            del working[pair_idx + 1]
+
+    elif num_seg < num_lines:
+        while len(working) < num_lines:
+            candidates = [
+                (i, w) for i, w in enumerate(working)
+                if w["line_end"] - w["line_start"] > 1
+            ]
+            if not candidates:
+                return None
+            split_idx = max(candidates, key=lambda x: x[1]["line_end"] - x[1]["line_start"])[0]
+            to_split = working[split_idx]
+
+            l_start, l_end = to_split["line_start"], to_split["line_end"]
+            mid_line = l_start + (l_end - l_start) // 2
+
+            chars_left = sum(len(parsed_lines[i]["line"]) for i in range(l_start, mid_line))
+            chars_right = sum(len(parsed_lines[i]["line"]) for i in range(mid_line, l_end))
+            total_chars = chars_left + chars_right
+            ratio = chars_left / total_chars if total_chars > 0 else 0.5
+
+            split_time = to_split["start"] + to_split["duration"] * ratio
+
+            working[split_idx] = {
+                "start": to_split["start"],
+                "end": split_time,
+                "duration": split_time - to_split["start"],
+                "line_start": l_start,
+                "line_end": mid_line,
+            }
+            working.insert(split_idx + 1, {
+                "start": split_time,
+                "end": to_split["end"],
+                "duration": to_split["end"] - split_time,
+                "line_start": mid_line,
+                "line_end": l_end,
+            })
+
+    if len(working) == num_lines:
+        for i, seg in enumerate(working):
+            parsed_lines[i]["start"] = seg["start"]
+            parsed_lines[i]["end"] = seg["end"]
+        return parsed_lines
+    return None
+
+
 def align_with_whisper(audio_path: str, parsed: list[dict], total_duration: float) -> list[dict] | None:
     """
     Use Whisper to get actual vocal timestamps.
-    Maps transcribed segments to known lyrics by count.
-    Falls back gracefully: returns None if count mismatch or whisper fails.
+    Maps transcribed segments to known lyrics by count or merge/split.
     """
     try:
         print(f"  Transcribing with Whisper (small model)...")
-        model = whisper.load_model('small')
+        model = _whisper.load_model('small')
         result = model.transcribe(audio_path)
 
-        # Filter out instrumental/non-lyric segments (short text, low confidence)
         segments = [s for s in result['segments'] if len(s['text'].strip()) > 2]
         print(f"  Whisper detected {len(segments)} vocal segments, expected {len(parsed)}")
 
@@ -62,8 +146,11 @@ def align_with_whisper(audio_path: str, parsed: list[dict], total_duration: floa
                 parsed[i]["end"] = seg["end"]
             return parsed
 
-        # Count mismatch: fall back to RMS analysis
-        print(f"  Segment count mismatch, falling back to waveform analysis")
+        # Try merge/split matching before falling back
+        matched = _match_segments(segments, parsed)
+        if matched:
+            return matched
+        print(f"  Could not match {len(segments)} segments to {len(parsed)} lines, falling back to waveform analysis")
         return None
 
     except Exception as e:
