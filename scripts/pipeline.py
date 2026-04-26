@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -34,12 +35,28 @@ def _script_path(name: str) -> str:
     return os.path.join(SCRIPTS_DIR, name)
 
 
-def _run(cmd: list[str], desc: str, dry_run: bool = False) -> subprocess.CompletedProcess | bool:
+def _run(cmd: list[str], desc: str, dry_run: bool = False) -> bool:
+    """Run command, print output. Returns True on success."""
     print(f"\n=== {desc} ===")
     print(f"  {'[DRY RUN] ' if dry_run else ''}{' '.join(cmd)}")
     if dry_run:
         return True
-    return subprocess.run(cmd, cwd=BASE_DIR, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=BASE_DIR, capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr or result.stdout or "")
+        return False
+    return True
+
+
+def _run_capture(cmd: list[str], desc: str) -> str | None:
+    """Run command, return stdout. Returns None on failure."""
+    print(f"\n=== {desc} ===")
+    print(f"  {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=BASE_DIR, capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr or result.stdout or "")
+        return None
+    return result.stdout
 
 
 def _validate_step(name: str, check_fn) -> bool:
@@ -90,27 +107,25 @@ def main():
             "--lyrics", args.lyrics,
             "--model", args.model,
         ]
-        result = _run(cmd, "Generate music", args.dry_run)
-        if not args.dry_run:
-            if result.returncode != 0:
-                print(result.stderr, file=sys.stderr)
-                sys.exit(1)
-            # Parse JSON output for music_id
-            for line in result.stdout.strip().split("\n"):
-                line = line.strip()
-                if line.startswith("["):
-                    try:
-                        data = json.loads(line)
-                        if isinstance(data, list) and len(data) > 0:
-                            music_id = data[0].get("id")
-                            print(f"  Music ID: {music_id}")
-                            break
-                    except json.JSONDecodeError:
-                        continue
-            if not music_id:
-                print(f"Error: Could not extract music_id from generate.py output", file=sys.stderr)
-                print(result.stdout[:500], file=sys.stderr)
-                sys.exit(1)
+        stdout = _run_capture(cmd, "Generate music")
+        if stdout is None:
+            sys.exit(1)
+        # Parse JSON output for music_id
+        for line in stdout.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("["):
+                try:
+                    data = json.loads(line)
+                    if isinstance(data, list) and len(data) > 0:
+                        music_id = data[0].get("id")
+                        print(f"  Music ID: {music_id}")
+                        break
+                except json.JSONDecodeError:
+                    continue
+        if not music_id:
+            print(f"Error: Could not extract music_id from generate.py output", file=sys.stderr)
+            print(stdout[:500], file=sys.stderr)
+            sys.exit(1)
         step = 2
 
     # Step 2: Download MP3 (skip if --audio provided)
@@ -122,6 +137,13 @@ def main():
         cmd = ["python", _script_path("download.py"), "--id", music_id or title_slug]
         if not _run(cmd, "Download MP3", args.dry_run):
             sys.exit(1)
+        # Rename to title-based filename if needed (download saves as {music_id}.mp3)
+        if not args.dry_run:
+            id_path = os.path.join(output_dir, f"{music_id}.mp3")
+            if os.path.exists(id_path) and id_path != audio_path:
+                import shutil
+                shutil.copy2(id_path, audio_path)
+                print(f"  Copied to: {audio_path}")
         step = 3
 
     # Step 3–12: standard steps
@@ -136,7 +158,11 @@ def main():
         )),
         (5, "Validate SRT", lambda: _validate_step("SRT", lambda: validate.check_srt(srt_path)) if not args.dry_run else print("  [SKIP] SRT (dry-run)") or True),
         (6, "Generate storyboard", lambda: _run(
-            ["python", _script_path("gen_storyboard.py")], "Generate storyboard", args.dry_run
+            ["python", _script_path("gen_storyboard.py"),
+             "--title", args.title,
+             "--style", args.prompt or "cinematic",
+             "--lyrics", args.lyrics],
+            "Generate storyboard", args.dry_run
         )),
         (7, "Batch generate images", lambda: _run(
             ["python", _script_path("batch_generate_images.py")], "Batch generate images", args.dry_run
@@ -176,13 +202,8 @@ def main():
     for num, name, fn in active:
         print(f"\n[{num}] {name}...")
         try:
-            result = fn()
-            # Check if result is a subprocess result
-            if isinstance(result, subprocess.CompletedProcess):
-                if result.returncode != 0:
-                    print(result.stderr, file=sys.stderr)
-                    raise RuntimeError(f"Step {num} failed (exit {result.returncode})")
-            elif result is False or result is None:
+            ok = fn()
+            if not ok:
                 raise RuntimeError(f"Step {num} failed")
         except Exception as e:
             print(f"  Error: {e}", file=sys.stderr)

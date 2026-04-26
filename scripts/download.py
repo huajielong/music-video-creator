@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import asyncio
+import time
 
 try:
     import requests
@@ -31,17 +32,26 @@ BASE_URL = "https://www.tunee.ai/music"
 
 
 def _extract_audio_url(music_id: str) -> str | None:
-    """Extract direct audio URL from Tunee share page HTML."""
+    """Extract direct audio URL from Tunee share page HTML. Polls until available."""
     share_url = f"{BASE_URL}/{music_id}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    try:
-        resp = requests.get(share_url, headers=headers, timeout=15)
-        if resp.status_code != 200:
-            return None
-        match = re.search(r'"audioUrl":"(https://[^"]+?\.mp3\?auth_key=[^"]+)"', resp.text)
-        return match.group(1) if match else None
-    except Exception:
-        return None
+
+    for attempt in range(12):  # up to ~60s wait
+        try:
+            resp = requests.get(share_url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                time.sleep(5)
+                continue
+            # Match audioUrl in Next.js RSC payload (backslash-escaped)
+            match = re.search(r'\\"audioUrl\\":\\"(https://[^\\]+?)\\"', resp.text)
+            if match:
+                url = match.group(1)
+                if url != "null" and not url.endswith(".null"):
+                    return url
+            time.sleep(5)
+        except Exception:
+            time.sleep(5)
+    return None
 
 
 def _try_direct_download(music_id: str) -> str | None:
