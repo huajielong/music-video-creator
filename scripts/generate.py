@@ -46,20 +46,19 @@ def get_share_results(data: dict) -> list[dict] | None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Tunee AI Music Generation")
-    parser.add_argument("--prompt", required=True, help="Style, mood, or scene description")
-    parser.add_argument(
-        "--title",
-        required=True,
-        help="Song or track title; must be confirmed by user or proposed by AI",
+    parser = argparse.ArgumentParser(
+        description="Tunee AI Music Generation — compose songs or instrumentals",
+        epilog="Examples:\n"
+               "  %(prog)s --title \"My Song\" --prompt \"pop, female vocal, energetic\" --lyrics \"[Verse]...\" --model mureka_v9\n"
+               "  %(prog)s --title \"Ambient\" --prompt \"ambient, piano, relaxing\" --model minimax_music\n"
+               "Outputs JSON to stdout: [{\"id\": \"...\", \"url\": \"...\"}, ...]",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--lyrics", default="", help="Full lyrics (required for lyric mode)")
-    parser.add_argument(
-        "--model",
-        required=True,
-        help="Model ID; must match list_models.py stdout; run that script first if no list in this conversation",
-    )
-    parser.add_argument("--api-key", dest="api_key", default=None, help="API Key, or use env TUNEE_API_KEY")
+    parser.add_argument("--prompt", required=True, help="Style/mood description, e.g. \"pop, female vocal, energetic\"")
+    parser.add_argument("--title", required=True, help="Song or track title")
+    parser.add_argument("--lyrics", default="", help="Full lyrics with [Section] tags (omit for instrumental)")
+    parser.add_argument("--model", required=True, help="Model ID from list_models.py, e.g. mureka_v9")
+    parser.add_argument("--api-key", dest="api_key", default=None, help="TUNEE_API_KEY or use env var")
     args = parser.parse_args()
 
     title = args.title.strip()

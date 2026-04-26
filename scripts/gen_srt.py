@@ -304,13 +304,23 @@ def generate_srt(parsed: list[dict]) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate SRT subtitles with audio-aware timing")
+    parser = argparse.ArgumentParser(
+        description="Generate SRT subtitles from lyrics with audio-aware timing",
+        epilog="Timing modes (auto-selected in order):\n"
+               "  1. Whisper alignment (--audio, requires openai-whisper) — most accurate\n"
+               "  2. RMS waveform analysis (--audio, no whisper) — estimates vocal regions\n"
+               "  3. Character-count proportion (--duration only) — evenly distributes by text length\n"
+               "Examples:\n"
+               "  %(prog)s --audio song.mp3 --lyrics \"[Verse]...\" --output subs.srt\n"
+               "  %(prog)s --input lyrics.txt --duration 180 --output subs.srt",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--input", help="Lyrics text file path")
-    group.add_argument("--lyrics", help="Lyrics text inline (use \\n for newlines)")
+    group.add_argument("--lyrics", help="Lyrics text inline, use \\n for newlines")
     parser.add_argument("--duration", type=float, default=None,
-                        help="Audio duration in seconds (required for fallback mode)")
-    parser.add_argument("--audio", default=None, help="Audio file path for timing analysis")
+                        help="Audio duration in seconds (required without --audio)")
+    parser.add_argument("--audio", default=None, help="Audio file path for Whisper/waveform timing analysis")
     parser.add_argument("--output", default=None, help="Output SRT file path")
     args = parser.parse_args()
 

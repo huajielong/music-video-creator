@@ -188,13 +188,19 @@ def extract_prompts(shots: list[dict]) -> list[str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate storyboard from lyrics")
+    parser = argparse.ArgumentParser(
+        description="Generate shot-by-shot storyboard from lyrics",
+        epilog="Examples:\n"
+               "  %(prog)s --title \"My Song\" --style \"cinematic, wuxia\" --lyrics \"[Verse]...\"\n"
+               "  %(prog)s --title \"Song\" --style \"sci-fi\" --input lyrics.txt --output storyboard.md --prompts image_prompts.py",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--title", required=True, help="Song title")
-    parser.add_argument("--style", default="国风武侠，写实电影感，中国古典美学", help="Visual style description")
-    parser.add_argument("--lyrics", help="Lyrics text with [Section] tags (use \\n for newlines)")
-    parser.add_argument("--input", help="Lyrics file path")
+    parser.add_argument("--style", default="国风武侠，写实电影感，中国古典美学", help="Visual style description for all shots")
+    parser.add_argument("--lyrics", help="Lyrics with [Section] tags, use \\n for newlines")
+    parser.add_argument("--input", help="Lyrics text file path (alternative to --lyrics)")
     parser.add_argument("--output", default=None, help="Output storyboard markdown path")
-    parser.add_argument("--prompts", default=None, help="Output prompts Python file (for batch_generate_images.py)")
+    parser.add_argument("--prompts", default=None, help="Output prompts Python file path (used by batch_generate_images.py)")
     args = parser.parse_args()
 
     if args.input:

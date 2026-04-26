@@ -69,15 +69,23 @@ def _validate_step(name: str, check_fn) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Music video creation pipeline")
-    parser.add_argument("--title", required=True, help="Song title")
-    parser.add_argument("--prompt", default="", help="Music style prompt (needed for step 1)")
-    parser.add_argument("--lyrics", default="", help="Lyrics text")
-    parser.add_argument("--model", default="", help="Tunee model ID (needed for step 1)")
-    parser.add_argument("--step", type=int, default=1, help="Start from step number (default: 1)")
-    parser.add_argument("--dry-run", action="store_true", help="Print steps without executing")
-    parser.add_argument("--audio", default=None, help="Existing audio file (skips step 1-2)")
-    parser.add_argument("--duration", type=float, default=None, help="Audio duration in seconds")
+    parser = argparse.ArgumentParser(
+        description="Music video creation pipeline — end-to-end",
+        epilog="Examples:\n"
+               "  %(prog)s --title \"My Song\" --prompt \"pop, female\" --lyrics \"[Verse]...\" --model mureka_v9\n"
+               "  %(prog)s --title \"Song\" --audio path/to/song.mp3 --lyrics \"...\"\n"
+               "  %(prog)s --title \"Song\" --lyrics \"...\" --step 6\n"
+               "  %(prog)s --title \"Song\" --lyrics \"...\" --dry-run",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--title", required=True, help="Song title (used for output filenames)")
+    parser.add_argument("--prompt", default="", help="Music style prompt, e.g. \"pop, female vocal\" (needed for step 1)")
+    parser.add_argument("--lyrics", default="", help="Lyrics with [Section] tags, use \\n for newlines")
+    parser.add_argument("--model", default="", help="Tunee model ID, e.g. mureka_v9 (needed for step 1)")
+    parser.add_argument("--step", type=int, default=1, help="Start from this step number (default: 1). Resume: --step 6")
+    parser.add_argument("--dry-run", action="store_true", help="Print steps without executing anything")
+    parser.add_argument("--audio", default=None, help="Existing audio file path. Skips generate + download steps")
+    parser.add_argument("--duration", type=float, default=None, help="Audio duration in seconds (needed if no --audio)")
     args = parser.parse_args()
 
     output_dir = OUTPUT_DIR

@@ -134,9 +134,16 @@ async def download_mp3(music_id: str) -> str | None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download MP3 from Tunee")
+    parser = argparse.ArgumentParser(
+        description="Download MP3 from Tunee share page",
+        epilog="Examples:\n"
+               "  %(prog)s --id abc123\n"
+               "  %(prog)s --url https://www.tunee.ai/music/abc123\n"
+               "Output: output/<music_id>.mp3",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--id", help="Music ID (from generate output)")
+    group.add_argument("--id", help="Music ID from generate.py output")
     group.add_argument("--url", help="Full Tunee share URL")
     args = parser.parse_args()
 

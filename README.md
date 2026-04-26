@@ -2,6 +2,20 @@
 
 > **AI-powered music video generation** — compose songs, create storyboards, batch-generate images/videos, and assemble a final MV with whisper-synced subtitles. All from a single lyrics file.
 
+<p align="center">
+  <img src="assets/demo_preview.gif" width="480" alt="Demo Preview">
+  <br>
+  <em>Demo: 10 storyboard frames from "笑傲江湖" (Mureka V9 + Doubao Seedream 5.0)</em>
+</p>
+
+<details>
+<summary>▶️ Watch final MV preview (10s)</summary>
+
+<video src="assets/demo_preview.mp4" controls width="720">
+  Your browser does not support the video tag.
+</video>
+</details>
+
 ---
 
 ## ✨ What You Can Do

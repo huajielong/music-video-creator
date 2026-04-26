@@ -29,13 +29,20 @@ def parse_shot_range(text: str) -> list[int]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Assemble final MV")
-    parser.add_argument("--shots", default="1-30", help="Shot range, e.g. 1-30")
-    parser.add_argument("--audio", required=True, help="Audio file path (MP3)")
-    parser.add_argument("--srt", default=None, help="Subtitle file path (SRT)")
-    parser.add_argument("--output", default="output/MV_Final.mp4", help="Output file path")
-    parser.add_argument("--fps", type=int, default=24, help="Output FPS")
-    parser.add_argument("--videos-dir", default=None, help="Video clips directory")
+    parser = argparse.ArgumentParser(
+        description="Assemble final MV: concat video clips + overlay audio + burn subtitles (FFmpeg)",
+        epilog="Examples:\n"
+               "  %(prog)s --audio output/song.mp3 --srt output/song.srt --output final.mp4\n"
+               "  %(prog)s --audio song.mp3 --srt song.srt --shots 1-30 --fps 30\n"
+               "Requires FFmpeg: https://ffmpeg.org/download.html",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--shots", default="1-30", help="Shot range, e.g. 1-30 or 1,3,5")
+    parser.add_argument("--audio", required=True, help="Audio file path (MP3/WAV)")
+    parser.add_argument("--srt", default=None, help="Subtitle file path (SRT) — optional")
+    parser.add_argument("--output", default="output/MV_Final.mp4", help="Output MP4 path")
+    parser.add_argument("--fps", type=int, default=24, help="Output frame rate (default: 24)")
+    parser.add_argument("--videos-dir", default=None, help="Video clips directory (default: output/res/videos)")
     args = parser.parse_args()
 
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
