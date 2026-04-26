@@ -127,6 +127,11 @@ def _match_segments(segments: list[dict], parsed_lines: list[dict]) -> list[dict
     return None
 
 
+def _has_lyric_content(text: str) -> bool:
+    """Check if text contains CJK characters (actual lyrics vs instrumental tags)."""
+    return any('一' <= c <= '鿿' for c in text)
+
+
 def align_with_whisper(audio_path: str, parsed: list[dict], total_duration: float) -> list[dict] | None:
     """
     Use Whisper to get actual vocal timestamps.
@@ -137,7 +142,8 @@ def align_with_whisper(audio_path: str, parsed: list[dict], total_duration: floa
         model = _whisper.load_model('small')
         result = model.transcribe(audio_path)
 
-        segments = [s for s in result['segments'] if len(s['text'].strip()) > 2]
+        # Filter out instrumental tags (e.g. "Zither Harp", "Music") via CJK detection
+        segments = [s for s in result['segments'] if _has_lyric_content(s['text'].strip())]
         print(f"  Whisper detected {len(segments)} vocal segments, expected {len(parsed)}")
 
         if len(segments) == len(parsed):
