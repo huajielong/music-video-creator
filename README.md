@@ -179,6 +179,3 @@ ARK_API_KEY=ark-xxx
 
 ---
 
-## 📄 License
-
-MIT
