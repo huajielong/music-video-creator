@@ -4,6 +4,12 @@
 # Generated output
 output/
 
+# Pretrained ML models (spleeter, etc.) — download separately
+pretrained_models/
+
+# Demo sample outputs (not source code)
+assets/samples/
+
 # Python
 __pycache__/
 *.pyc
