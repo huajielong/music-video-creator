@@ -21,6 +21,8 @@
   <a href="#-faq">❓ FAQ</a>
 </p>
 
+> [中文说明](README.zh.md)
+
 ---
 
 ## 🤔 From Lyrics to MV: How Many Steps?
@@ -185,5 +187,3 @@ MIT © [huajielong](https://github.com/huajielong)
 <p align="center">
   ⭐ Star if this helps you create amazing MVs!
 </p>
-
-> [中文说明](README.zh.md)
