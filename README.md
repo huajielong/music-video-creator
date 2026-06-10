@@ -1,5 +1,3 @@
-> [🇨🇳 中文说明](README.zh.md)
-
 <p align="center">
   <img src="https://img.shields.io/badge/version-1.0.0-blue" alt="v1.0"/>
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"/>
@@ -187,3 +185,5 @@ MIT © [huajielong](https://github.com/huajielong)
 <p align="center">
   ⭐ Star if this helps you create amazing MVs!
 </p>
+
+> [中文说明](README.zh.md)
